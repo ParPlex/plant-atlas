@@ -1,0 +1,3 @@
+# Never commit personal plant data
+*.json
+!countries-50m.json

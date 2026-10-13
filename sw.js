@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION on every release so phones pick up the new files.
-const VERSION = "plant-atlas-1";
+const VERSION = "plant-atlas-2";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "countries-50m.json",
   "vendor/d3.min.js", "vendor/topojson-client.min.js",

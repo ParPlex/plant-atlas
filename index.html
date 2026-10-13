@@ -120,7 +120,7 @@ input[type=text]{width:100%;min-height:44px;padding:0 12px;border-radius:8px;bor
     <div class="stat"><b id="sPlants">0</b><span>Plants</span></div>
     <div class="stat"><b id="sCountries">0</b><span>Countries</span></div>
     <div class="stat"><b id="sVisits">0</b><span>Visits</span></div>
-    <div class="stat"><b id="sFar">–</b><span>Farthest, km</span></div>
+    <div class="stat"><b id="sKm">0</b><span>Km travelled</span></div>
   </div>
 
   <div class="mapwrap" id="mapwrap">
@@ -194,6 +194,7 @@ input[type=text]{width:100%;min-height:44px;padding:0 12px;border-radius:8px;bor
 <script>
 const $ = id => document.getElementById(id);
 const KEY = "plant-atlas-v1";
+const DEFAULT_HOME = { place: "Bilzen, Belgium", lat: 50.8706, lon: 5.5181 };
 const S = { plants: [], home: null, lastExport: null, features: [], selected: null, ed: null };
 
 /* ---------- storage: this device only ---------- */
@@ -202,6 +203,7 @@ function load() {
     const d = JSON.parse(localStorage.getItem(KEY));
     if (d && Array.isArray(d.plants)) { S.plants = d.plants.filter(validPlant); S.home = validHome(d.home) ? d.home : null; S.lastExport = d.lastExport || null; }
   } catch {}
+  if (!S.home) S.home = { ...DEFAULT_HOME };
 }
 function persist() {
   try { localStorage.setItem(KEY, JSON.stringify({ plants: S.plants, home: S.home, lastExport: S.lastExport })); return true; }
@@ -231,7 +233,12 @@ function layoutMap() {
   gWorld.selectAll(".country").data(S.features).join("path").attr("class", "country").attr("d", path);
   paintCountries(); placeDots();
 }
-new ResizeObserver(() => { const t = T; layoutMap(); svg.call(zoom.transform, t); }).observe($("mapwrap"));
+new ResizeObserver(([e]) => {
+  const { width, height } = e.contentRect;
+  if (Math.abs(width - W) < 3 && Math.abs(height - H) < 3) return;
+  layoutMap();
+  if (S.ed?.lat != null) zoomToPoint(S.ed.lon, S.ed.lat, 6, 0); else fitPlants(0);
+}).observe($("mapwrap"));
 
 function xy(lon, lat) { const p = projection([lon, lat]); return [T.applyX(p[0]), T.applyY(p[1])]; }
 const radius = v => Math.min(4.5 + 2.2 * Math.sqrt(Math.max(0, (v || 1) - 1)), 13);
@@ -239,10 +246,17 @@ const radius = v => Math.min(4.5 + 2.2 * Math.sqrt(Math.max(0, (v || 1) - 1)), 1
 function placeDots() {
   if (!projection) return;
   const sorted = [...S.plants].sort((a, b) => (b.visits || 1) - (a.visits || 1));
+  // Plants in the same town share coordinates: fan them out in a small ring so every dot stays tappable.
+  const same = d3.group(sorted, p => p.lat.toFixed(3) + "," + p.lon.toFixed(3));
+  const pos = new Map();
+  for (const ps of same.values()) ps.forEach((p, i) => {
+    const [x, y] = xy(p.lon, p.lat), a = (2 * Math.PI * i) / ps.length, d = ps.length > 1 ? 9 : 0;
+    pos.set(p.id, [x + d * Math.cos(a), y + d * Math.sin(a)]);
+  });
   gDots.selectAll("circle.dot").data(sorted, d => d.id).join("circle")
     .attr("class", d => "dot" + (S.selected === d.id ? " sel" : ""))
     .attr("r", d => radius(d.visits))
-    .attr("cx", d => xy(d.lon, d.lat)[0]).attr("cy", d => xy(d.lon, d.lat)[1])
+    .attr("cx", d => pos.get(d.id)[0]).attr("cy", d => pos.get(d.id)[1])
     .on("click", (e, d) => { e.stopPropagation(); if (!S.ed) select(d.id); });
   const pin = S.ed && S.ed.lat != null ? [S.ed] : [];
   gDots.selectAll("g.pinG").data(pin).join(en => { const g = en.append("g").attr("class", "pinG");
@@ -304,12 +318,12 @@ function renderStats() {
   $("sPlants").textContent = S.plants.length;
   $("sCountries").textContent = new Set(S.plants.map(p => p.country)).size;
   $("sVisits").textContent = S.plants.reduce((s, p) => s + (p.visits || 1), 0);
-  $("sFar").textContent = S.home && S.plants.length ? fmt(Math.max(...S.plants.map(p => km(S.home, p)))) : "–";
+  $("sKm").textContent = fmt(S.plants.reduce((s, p) => s + 2 * km(S.home, p) * (p.visits || 1), 0));
   const hl = $("homeLine"); hl.replaceChildren();
   const t = document.createElement("span");
-  t.textContent = S.home ? "Home base: " + S.home.place : "No home base set, so distances are hidden.";
+  t.textContent = `From ${S.home.place}: round trip per visit, straight-line distance.`;
   const b = document.createElement("button"); b.type = "button"; b.className = "linkbtn";
-  b.textContent = S.home ? "Change" : "Set home base"; b.onclick = () => openEditor("home");
+  b.textContent = "Change home base"; b.onclick = () => openEditor("home");
   hl.append(t, b);
 }
 
@@ -324,7 +338,7 @@ function renderList() {
       const b = document.createElement("button"); b.type = "button"; b.className = "item";
       const n = document.createElement("span"); n.className = "n"; n.textContent = p.name;
       const pl = document.createElement("span"); pl.className = "p"; pl.textContent = p.place;
-      const v = document.createElement("span"); v.className = "v"; v.textContent = (p.visits || 1) + "×";
+      const v = document.createElement("span"); v.className = "v"; v.textContent = `${fmt(km(S.home, p))} km · ${p.visits || 1}×`;
       b.append(n, pl, v);
       b.onclick = () => { select(p.id); zoomToPoint(p.lon, p.lat, 6); $("mapwrap").scrollIntoView({ behavior: "smooth", block: "center" }); };
       g.append(b);
@@ -352,7 +366,7 @@ function renderCard() {
   c.replaceChildren(); c.hidden = false;
   const h = document.createElement("h3"); h.textContent = p.name;
   const m = document.createElement("div"); m.className = "meta";
-  m.textContent = `${p.place} · ${p.visits || 1} visit${(p.visits || 1) > 1 ? "s" : ""}` + (S.home ? ` · ${fmt(km(S.home, p))} km from home` : "");
+  m.textContent = `${p.place} · ${p.visits || 1} visit${(p.visits || 1) > 1 ? "s" : ""} · ${fmt(km(S.home, p))} km from ${S.home.place.split(",")[0]}`;
   const r = document.createElement("div"); r.className = "row";
   const plus = document.createElement("button"); plus.type = "button"; plus.className = "btn"; plus.textContent = "+1 visit";
   plus.onclick = () => { p.visits = (p.visits || 1) + 1; if (persist()) toast("Visit added"); render(); };
@@ -487,7 +501,7 @@ $("importFile").onchange = async e => {
     const byId = new Map(S.plants.map(p => [p.id, p]));
     let added = 0; for (const p of incoming) { if (!byId.has(p.id)) added++; byId.set(p.id, p); }
     S.plants = [...byId.values()];
-    if (validHome(d.home) && !S.home) S.home = d.home;
+    if (validHome(d.home)) S.home = d.home;
     if (persist()) toast(`Imported ${incoming.length} plants, ${added} new`);
     render(); fitPlants();
   } catch { toast("That file is not a Plant Atlas backup."); }
